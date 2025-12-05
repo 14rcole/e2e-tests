@@ -1,0 +1,53 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: push-build-plr
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.12.1"
+    tekton.dev/tags: release
+spec:
+  description: pushes the build PLR yaml as an OCI artifact
+  params:
+    - name: dataPath
+      type: string
+      description: Path to the JSON string of the merged data to use in the data workspace
+    - name: snapshot
+      type: string
+      description: the namespaced name of the snapshot
+  volumes:
+    - name: workdir
+      emptyDir: {}
+    - name: trusted-ca
+      configMap:
+        name: $(params.caTrustConfigMapName)
+        items:
+          - key: $(params.caTrustConfigMapKey)
+            path: ca-bundle.crt
+        optional: true
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+    env:
+      - name: BUILD_YAML_FILE
+        value: $(params.dataPath)/build_plr.yaml
+  steps:
+    - name: get-plr-yaml
+      image: quay.io/konflux-ci/release-service-utils:02a8ddcd16113371a255fd1ef0a196399d300162
+      script: |
+        # get the build PLR name from the snapshot annotation 'appstudio.openshift.io/build-pipelinerun'
+        BUILD_PIPELINERUN=$(get-resource "snapshot" "${SNAPSHOT}" '{.spec.annotations."appstudio.openshift.io/build-pipelinerun"}')
+
+        # get pipelinerun yaml
+        oc get -o yaml $BUILD_PIPELINERUN > $BUILD_YAML_FILE
+
+        # remove integration service annotations
+        # test.appstudio.openshift.io annotations
+        # appstudio.openshift.io/snapshot annotation
+        yq -i 'del(.metadata.annotations."test.appstudio.openshift.io*")' $BUILD_YAML_FILE
+        yq -i 'del(.metadata.annotations."appstudio.openshift.io/snapshot")' $BUILD_YAML_FILE
+        
+        # replace image name with new repo
+        yq -i '(.status.results[] | select(.name == "IMAGE_URL").value) = "my-new-image-url:tag"' $BUILD_YAML_FILE
+
+        # remove finalizer from build PLR
