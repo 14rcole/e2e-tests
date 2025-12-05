@@ -1,0 +1,6 @@
+Running target: Local:TestE2E
+exec: git "diff" "--name-status" "upstream/main..HEAD"
+I1022 15:08:42.284319 2327248 util.go:460] The following files, go.mod, go.sum, tests/integration-service/const.go, tests/integration-service/status-reporting-to-pullrequest.go, were changed!
+exec: ginkgo "-p" "-v" "--output-interceptor-mode=none" "--no-color" "--timeout=90m" "--json-report=e2e-report.json" "--output-dir=." "--junit-report=e2e-report.xml" "--label-filter=github-status-reporting" "./cmd" "--"
+Error: running "ginkgo -p -v --output-interceptor-mode=none --no-color --timeout=90m --json-report=e2e-report.json --output-dir=. --junit-report=e2e-report.xml --label-filter=github-status-reporting ./cmd --" failed with exit code 1
+make: *** [Makefile:49: local/test/e2e] Error 1
