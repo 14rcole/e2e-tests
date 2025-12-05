@@ -1,0 +1,99 @@
+apiVersion: tekton.dev/v1
+kind: Task
+metadata:
+  name: push-build-plr
+  annotations:
+    tekton.dev/pipelines.minVersion: "0.12.1"
+    tekton.dev/tags: release
+spec:
+  description: pushes the build PLR yaml as an OCI artifact
+  params:
+    - name: dataPath
+      type: string
+      description: Path to the JSON string of the merged data to use in the data workspace
+    - name: snapshot
+      type: string
+      description: the namespaced name of the snapshot
+    - name: image
+      type: string
+      description: the image with which the PLR is associated
+    - name: image-tag
+      type: string
+      description: the tag for the image
+    - name: quay-secret-name
+      type: string
+      description: name of the secret containing quay dockerconfigjson
+  volumes:
+    - name: workdir
+      emptyDir: {}
+    - name: trusted-ca
+      configMap:
+        name: $(params.caTrustConfigMapName)
+        items:
+          - key: $(params.caTrustConfigMapKey)
+            path: ca-bundle.crt
+        optional: true
+    - name: quay-token
+      secret:
+        secretName: $(params.quay-secret-name)
+        optional: true
+  stepTemplate:
+    volumeMounts:
+      - mountPath: /var/workdir
+        name: workdir
+      - mountPath: /etc/secrets
+        name: quay-token
+        readOnly: true
+    env:
+      - name: BUILD_YAML_FILE
+        value: $(params.dataPath)/build_plr.yaml
+        #value: build_plr.yaml
+      - name: SNAPSHOT
+        value: $(params.snapshot)
+      - name: PLR_OCI_ARTIFACT_IMAGE
+        value: $(params.image)-plr
+     # - name: PLR_OCI_ARTIFACT_TAG
+     #   value: $(params.image-tag)
+  steps:
+    - name: get-plr-yaml
+      image: quay.io/konflux-ci/release-service-utils:02a8ddcd16113371a255fd1ef0a196399d300162
+      script: |
+        #!/bin/bash -x
+        
+        # get the build PLR name from the snapshot annotation 'appstudio.openshift.io/build-pipelinerun'
+        BUILD_PIPELINERUN=$(get-resource "snapshot" "${SNAPSHOT}" '{.metadata.labels}' | jq -r '."appstudio.openshift.io/build-pipelinerun"')
+
+        mkdir -p $(params.dataPath)
+        #touch $BUILD_YAML_FILE
+
+        # get pipelinerun yaml
+        #kubectl get -o yaml pipelinerun $BUILD_PIPELINERUN | tee $BUILD_YAML_FILE
+        kubectl get -o yaml pipelinerun $BUILD_PIPELINERUN > $BUILD_YAML_FILE
+
+        # remove integration service annotations
+        # test.appstudio.openshift.io annotations
+        # appstudio.openshift.io/snapshot annotation
+        yq -i 'del(.metadata.annotations."test.appstudio.openshift.io*")' $BUILD_YAML_FILE
+        yq -i 'del(.metadata.annotations."appstudio.openshift.io/snapshot")' $BUILD_YAML_FILE
+
+        # replace image name with new repo
+        yq -i '(.status.results[] | select(.name == "IMAGE_URL").value) = "my-new-image-url:tag"' $BUILD_YAML_FILE
+
+        # remove finalizer from build PLR
+        echo "removed finalizer"
+
+    - name: push-plr-yaml
+      image: quay.io/konflux-ci/release-service-utils:02a8ddcd16113371a255fd1ef0a196399d300162
+      script: |
+        #!/bin/bash -x
+
+        # get the name of the image to push
+        #IMAGE="${PLR_OCI_ARTIFACT_IMAGE}:${PLR_OCI_ARTIFACT_TAG}" 
+        IMAGE="${PLR_OCI_ARTIFACT_IMAGE}:latest" 
+
+        echo "SECRETS PATH"
+        cat /etc/secrets/.dockerconfigjson
+        
+        # push the artifact
+        cp ${BUILD_YAML_FILE} ./build-plr.yaml
+        oras push ${IMAGE} --registry-config /etc/secrets/.dockerconfigjson --artifact-type application/konflux.build.pipelinerun ./build-plr.yaml
